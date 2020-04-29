@@ -82,6 +82,10 @@ const (
 	initContainerCpu        = "100m"
 	initContainerEphStorage = "5Gi"
 	initContainerMem        = "512Mi"
+
+	checkpointVolumeName    = "checkpoints"
+	checkpointMountPath     = "/tmp/checkpoints"
+	claimName               = "checkpoint-pv-claim"
 )
 
 const (
@@ -1122,6 +1126,13 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 		Name:      configVolumeName,
 		MountPath: configMountPath,
 	})
+
+	// 添加pvc，持久化存储checkpoint
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      	checkpointVolumeName,
+		MountPath: checkpointMountPath,
+	})
+
 	podSpec.Spec.Containers[0] = container
 
 	scriptMode := int32(0555)
@@ -1139,6 +1150,16 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 						Mode: &scriptMode,
 					},
 				},
+			},
+		},
+	})
+
+	// 添加pvc，持久化存储checkpoint
+	podSpec.Spec.Volumes = append(podSpec.Spec.Volumes, corev1.Volume{
+		Name: checkpointVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: claimName,
 			},
 		},
 	})
