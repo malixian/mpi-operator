@@ -58,6 +58,8 @@ import (
 	clientset "github.com/kubeflow/mpi-operator/pkg/client/clientset/versioned"
 	informers "github.com/kubeflow/mpi-operator/pkg/client/informers/externalversions/kubeflow/v1alpha2"
 	listers "github.com/kubeflow/mpi-operator/pkg/client/listers/kubeflow/v1alpha2"
+	//"k8s.io/kubernetes/pkg/apis/batch"
+	"strconv"
 )
 
 const (
@@ -83,9 +85,9 @@ const (
 	initContainerEphStorage = "5Gi"
 	initContainerMem        = "512Mi"
 
-	checkpointVolumeName    = "checkpoints"
-	checkpointMountPath     = "/tmp/checkpoints"
-	claimName               = "checkpoint-pv-claim"
+	checkpointVolumeName = "checkpoints"
+	checkpointMountPath  = "/tmp/checkpoints"
+	claimName            = "checkpoint-pv-claim"
 )
 
 const (
@@ -522,6 +524,19 @@ func (c *MPIJobController) syncHandler(key string) error {
 	if !done {
 		workerSpec := mpiJob.Spec.MPIReplicaSpecs[kubeflow.MPIReplicaTypeWorker]
 		workerReplicas := *workerSpec.Replicas
+
+		// todo support elastic restore mpi worker
+		jobContainers := launcher.Spec.Template.Spec.Containers
+		if len(jobContainers) != 0 {
+			jobContainer := jobContainers[0]
+			respectWorkerReplicas := strconv.Itoa(int(workerReplicas))
+
+			for index, arg := range jobContainer.Args {
+				if arg == "-np" && index+1 < len(jobContainer.Args) && jobContainer.Args[index+1] != respectWorkerReplicas {
+					jobContainer.Args[index+1] = respectWorkerReplicas
+				}
+			}
+		}
 
 		// Get the ConfigMap for this MPIJob.
 		if config, err := c.getOrCreateConfigMap(mpiJob, workerReplicas); config == nil || err != nil {
@@ -1129,7 +1144,7 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 
 	// 添加pvc，持久化存储checkpoint
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-		Name:      	checkpointVolumeName,
+		Name:      checkpointVolumeName,
 		MountPath: checkpointMountPath,
 	})
 
