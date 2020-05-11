@@ -59,7 +59,7 @@ import (
 	informers "github.com/kubeflow/mpi-operator/pkg/client/informers/externalversions/kubeflow/v1alpha2"
 	listers "github.com/kubeflow/mpi-operator/pkg/client/listers/kubeflow/v1alpha2"
 	"strconv"
-	
+
 )
 
 const (
@@ -531,8 +531,9 @@ func (c *MPIJobController) syncHandler(key string) error {
 		// todo 目前的方式是通过创建一个新的job替换旧的job
 		var needRecreate bool
 		var respectWorkerReplicas int32
-		jobContainers := launcher.Spec.Template.Spec.Containers
-		if launcher != nil && len(jobContainers) > 0 {
+
+		if launcher != nil {
+			jobContainers := launcher.Spec.Template.Spec.Containers
 			jobContainer := jobContainers[0]
 			respectWorkerReplicas = workerReplicas
 			respectWorkerReplicasStr := strconv.Itoa(int(respectWorkerReplicas))
