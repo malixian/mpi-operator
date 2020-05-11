@@ -547,6 +547,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 
 		// #==== Recreate ====
 		if needRecreate {
+			fmt.Println("================== Recreate =============")
 			originName := mpiJob.Name
 			fakeName := "fake-" + mpiJob.Name
 			mpiJob.Name = fakeName
@@ -576,7 +577,14 @@ func (c *MPIJobController) syncHandler(key string) error {
 				}
 			}
 
+
 			worker, err = c.reCreateWorkerStatefulSet(mpiJob, workerReplicas, originName)
+			if err != nil {
+				return err
+			}
+
+
+			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
 			if err != nil {
 				return err
 			}
@@ -614,18 +622,14 @@ func (c *MPIJobController) syncHandler(key string) error {
 				return err
 			}
 
-		}
+			if launcher == nil {
+				launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
 
-		if launcher != nil && needRecreate {
-			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
-		}
-
-		if launcher == nil {
-			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
-
-			if err != nil {
-				return err
+				if err != nil {
+					return err
+				}
 			}
+
 		}
 	}
 
@@ -746,7 +750,10 @@ func (c *MPIJobController) getOrCreateConfigMap(mpiJob *kubeflow.MPIJob, workerR
 
 // recreateConfigMap 通过一个fake MPIJob name来创建一个新的configmap，但是参数中hostname仍使用之前MPI Job name
 func (c *MPIJobController) reCreateConfigMap(mpiJob *kubeflow.MPIJob, workerReplicas int32, originName string) (*corev1.ConfigMap, error) {
-	cm, err := c.kubeClient.CoreV1().ConfigMaps(mpiJob.Namespace).Create(reNewConfigMap(mpiJob, workerReplicas, originName))
+	cm, err := c.configMapLister.ConfigMaps(mpiJob.Namespace).Get(mpiJob.Name + configSuffix)
+	if errors.IsNotFound(err) {
+		cm, err = c.kubeClient.CoreV1().ConfigMaps(mpiJob.Namespace).Create(reNewConfigMap(mpiJob, workerReplicas, originName))
+	}
 	// If an error occurs during Get/Create, we'll requeue the item so we
 	// can attempt processing again later. This could have been caused by a
 	// temporary network failure, or any other transient reason.
@@ -926,7 +933,9 @@ func (c *MPIJobController) reCreateWorkerStatefulSet(mpiJob *kubeflow.MPIJob, wo
 
 	// If the worker is out of date, update the worker.
 	if worker != nil && *worker.Spec.Replicas != workerReplicas {
-		worker, err = c.kubeClient.AppsV1().StatefulSets(mpiJob.Namespace).Update(reNewWorker(mpiJob, workerReplicas, c.gangSchedulerName, originName))
+		worker.Spec.Replicas = &workerReplicas
+		worker, err = c.kubeClient.AppsV1().StatefulSets(mpiJob.Namespace).Update(worker)
+		//worker, err = c.kubeClient.AppsV1().StatefulSets(mpiJob.Namespace).Update(reNewWorker(mpiJob, workerReplicas, c.gangSchedulerName, originName))
 		// If an error occurs during Update, we'll requeue the item so we can
 		// attempt processing again later. This could have been caused by a
 		// temporary network failure, or any other transient reason.
