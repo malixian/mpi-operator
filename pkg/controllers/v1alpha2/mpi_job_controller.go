@@ -539,8 +539,6 @@ func (c *MPIJobController) syncHandler(key string) error {
 			respectWorkerReplicasStr := strconv.Itoa(int(respectWorkerReplicas))
 			for index, arg := range jobContainer.Args {
 				if arg == "-np" && index+1 < len(jobContainer.Args) && jobContainer.Args[index+1] != respectWorkerReplicasStr {
-					// todo mpi launcher arg fix
-					mpiJob.Spec.MPIReplicaSpecs[kubeflow.MPIReplicaTypeLauncher].Replicas =
 					needRecreate = true
 				}
 			}
