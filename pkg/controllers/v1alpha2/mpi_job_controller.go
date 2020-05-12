@@ -593,7 +593,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 			// Delete Origin Launcher Job
 			deletePolicy := metav1.DeletePropagationForeground
 			err = c.kubeClient.BatchV1().Jobs(namespace).Delete(
-				originName,
+				originName + launcherSuffix,
 				&metav1.DeleteOptions{
 					TypeMeta : metav1.TypeMeta{
 						Kind: "DeleteOptions",
@@ -1456,7 +1456,7 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 func reNewWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName string, originName string) *appsv1.StatefulSet {
 	labels := map[string]string{
 		labelGroupName:   "kubeflow.org",
-		labelMPIJobName:  mpiJob.Name,
+		labelMPIJobName:  originName,
 		labelMPIRoleType: worker,
 	}
 
