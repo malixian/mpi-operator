@@ -518,6 +518,13 @@ func (c *MPIJobController) syncHandler(key string) error {
 		return err
 	}
 
+	// check fake MPIJob
+	var isExistFakeJob bool
+	launcherJob, err := c.jobLister.Jobs(mpiJob.Namespace).Get("fake-" + mpiJob.Name + launcherSuffix)
+	if launcherJob != nil {
+		isExistFakeJob = true
+	}
+
 	var worker *appsv1.StatefulSet
 	// We're done if the launcher either succeeded or failed.
 	done := launcher != nil && isJobFinished(launcher)
@@ -547,6 +554,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 
 		// #==== Recreate ====
 		if needRecreate {
+
 			fmt.Println("================== Recreate =============")
 			originName := mpiJob.Name
 			fakeName := "fake-" + mpiJob.Name
@@ -583,13 +591,14 @@ func (c *MPIJobController) syncHandler(key string) error {
 				return err
 			}
 
-
-			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.reNewLauncher(mpiJob, c.kubectlDeliveryImage, workerReplicas))
-			if err != nil {
-				return err
+			launcherJob, err := c.jobLister.Jobs(mpiJob.Namespace).Get(mpiJob.Name + launcherSuffix)
+			if launcherJob == nil || !errors.IsNotFound(err) {
+				launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.reNewLauncher(mpiJob, c.kubectlDeliveryImage, workerReplicas))
+				if err != nil {
+					return err
+				}
 			}
 
-			//todo delete origin lanuncher Job
 			// Delete Origin Launcher Job
 			deletePolicy := metav1.DeletePropagationForeground
 			err = c.kubeClient.BatchV1().Jobs(namespace).Delete(
@@ -604,7 +613,6 @@ func (c *MPIJobController) syncHandler(key string) error {
 			if err != nil {
 				return err
 			}
-
 		} else {
 			// Get the ConfigMap for this MPIJob.
 			if config, err := c.getOrCreateConfigMap(mpiJob, workerReplicas); config == nil || err != nil {
@@ -638,7 +646,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 				return err
 			}
 
-			if launcher == nil {
+			if !isExistFakeJob && launcher == nil {
 				launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
 
 				if err != nil {
@@ -1739,11 +1747,6 @@ func (c *MPIJobController) newLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryI
 
 func (c *MPIJobController) reNewLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryImage string, workReplicas int32) *batchv1.Job {
 	launcherName := mpiJob.Name + launcherSuffix
-
-	launcherJob, err := c.jobLister.Jobs(mpiJob.Namespace).Get(launcherName)
-	if !errors.IsNotFound(err) {
-		return launcherJob
-	}
 
 	labels := map[string]string{
 		labelGroupName:   "kubeflow.org",
