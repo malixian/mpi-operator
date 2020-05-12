@@ -593,7 +593,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 			// Delete Origin Launcher Job
 			deletePolicy := metav1.DeletePropagationForeground
 			err = c.kubeClient.BatchV1().Jobs(namespace).Delete(
-				launcher.Name,
+				originName,
 				&metav1.DeleteOptions{
 					TypeMeta : metav1.TypeMeta{
 						Kind: "DeleteOptions",
