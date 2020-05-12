@@ -539,6 +539,8 @@ func (c *MPIJobController) syncHandler(key string) error {
 			respectWorkerReplicasStr := strconv.Itoa(int(respectWorkerReplicas))
 			for index, arg := range jobContainer.Args {
 				if arg == "-np" && index+1 < len(jobContainer.Args) && jobContainer.Args[index+1] != respectWorkerReplicasStr {
+					// todo mpi launcher arg fix
+					mpiJob.Spec.MPIReplicaSpecs[kubeflow.MPIReplicaTypeLauncher].Replicas =
 					needRecreate = true
 				}
 			}
@@ -584,7 +586,7 @@ func (c *MPIJobController) syncHandler(key string) error {
 			}
 
 
-			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.newLauncher(mpiJob, c.kubectlDeliveryImage))
+			launcher, err = c.kubeClient.BatchV1().Jobs(namespace).Create(c.reNewLauncher(mpiJob, c.kubectlDeliveryImage, workerReplicas))
 			if err != nil {
 				return err
 			}
@@ -1649,6 +1651,186 @@ func (c *MPIJobController) newLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryI
 			Name:      configVolumeName,
 			MountPath: configMountPath,
 		})
+	podSpec.Spec.Containers[0] = container
+
+	// Submit a warning event if the user specifies restart policy for
+	// the pod template. We recommend to set it from the replica level.
+	if podSpec.Spec.RestartPolicy != corev1.RestartPolicy("") {
+		errMsg := "Restart policy in pod template will be overwritten by restart policy in replica spec"
+		glog.Warning(errMsg)
+		c.recorder.Event(mpiJob, corev1.EventTypeWarning, podTemplateRestartPolicyReason, errMsg)
+	}
+	setRestartPolicy(podSpec, mpiJob.Spec.MPIReplicaSpecs[kubeflow.MPIReplicaTypeLauncher])
+
+	scriptsMode := int32(0555)
+	hostfileMode := int32(0444)
+	podSpec.Spec.Volumes = append(podSpec.Spec.Volumes,
+		corev1.Volume{
+			Name: kubectlVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		corev1.Volume{
+			Name: configVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: mpiJob.Name + configSuffix,
+					},
+					Items: []corev1.KeyToPath{
+						{
+							Key:  kubexecScriptName,
+							Path: kubexecScriptName,
+							Mode: &scriptsMode,
+						},
+						{
+							Key:  hostfileName,
+							Path: hostfileName,
+							Mode: &hostfileMode,
+						},
+					},
+				},
+			},
+		})
+	backOffLimit := mpiJob.Spec.BackoffLimit
+	activeDeadlineSeconds := mpiJob.Spec.ActiveDeadlineSeconds
+	if mpiJob.Spec.RunPolicy != nil {
+		warnMsg := fmt.Sprintf(
+			"runPolicy is specified in MPIJobSpec so backOffLimit/activeDeadlineSeconds in MPIJobSpec will be overwritten")
+		glog.Warning(warnMsg)
+		if mpiJob.Spec.RunPolicy.BackoffLimit != nil {
+			backOffLimit = mpiJob.Spec.RunPolicy.BackoffLimit
+		}
+		if mpiJob.Spec.RunPolicy.ActiveDeadlineSeconds != nil {
+			activeDeadlineSeconds = mpiJob.Spec.RunPolicy.ActiveDeadlineSeconds
+		}
+	}
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      launcherName,
+			Namespace: mpiJob.Namespace,
+			Labels:    labels,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(mpiJob, kubeflow.SchemeGroupVersionKind),
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:          backOffLimit,
+			ActiveDeadlineSeconds: activeDeadlineSeconds,
+			Template:              *podSpec,
+		},
+	}
+}
+
+func (c *MPIJobController) reNewLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryImage string, workReplicas int32) *batchv1.Job {
+	launcherName := mpiJob.Name + launcherSuffix
+	labels := map[string]string{
+		labelGroupName:   "kubeflow.org",
+		labelMPIJobName:  mpiJob.Name,
+		labelMPIRoleType: launcher,
+	}
+
+	podSpec := mpiJob.Spec.MPIReplicaSpecs[kubeflow.MPIReplicaTypeLauncher].Template.DeepCopy()
+	// copy the labels and annotations to pod from PodTemplate
+	if len(podSpec.Labels) == 0 {
+		podSpec.Labels = make(map[string]string)
+	}
+	for key, value := range labels {
+		podSpec.Labels[key] = value
+	}
+	// add SchedulerName to podSpec
+	if c.gangSchedulerName != "" {
+		if podSpec.Spec.SchedulerName != "" && podSpec.Spec.SchedulerName != c.gangSchedulerName {
+			glog.Warningf("%s scheduler is specified when gang-scheduling is enabled and it will be overwritten", podSpec.Spec.SchedulerName)
+		}
+		podSpec.Spec.SchedulerName = c.gangSchedulerName
+
+		if podSpec.Annotations == nil {
+			podSpec.Annotations = map[string]string{}
+		}
+		// we create the podGroup with the same name as the mpijob
+		podSpec.Annotations[podgroupv1alpha1.GroupNameAnnotationKey] = mpiJob.Name
+	}
+	podSpec.Spec.ServiceAccountName = launcherName
+	podSpec.Spec.InitContainers = append(podSpec.Spec.InitContainers, corev1.Container{
+		Name:            kubectlDeliveryName,
+		Image:           kubectlDeliveryImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Env: []corev1.EnvVar{
+			{
+				Name:  kubectlTargetDirEnv,
+				Value: kubectlMountPath,
+			},
+			{
+				Name:  "NAMESPACE",
+				Value: mpiJob.Namespace,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      kubectlVolumeName,
+				MountPath: kubectlMountPath,
+			},
+			{
+				Name:      configVolumeName,
+				MountPath: configMountPath,
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse(initContainerCpu),
+				corev1.ResourceMemory:           resource.MustParse(initContainerMem),
+				corev1.ResourceEphemeralStorage: resource.MustParse(initContainerEphStorage),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse(initContainerCpu),
+				corev1.ResourceMemory:           resource.MustParse(initContainerMem),
+				corev1.ResourceEphemeralStorage: resource.MustParse(initContainerEphStorage),
+			},
+		},
+	})
+	if len(podSpec.Spec.Containers) == 0 {
+		glog.Errorln("Launcher pod does not have any containers in its spec")
+	}
+	container := podSpec.Spec.Containers[0]
+	container.Env = append(container.Env,
+		corev1.EnvVar{
+			Name:  "OMPI_MCA_plm_rsh_agent",
+			Value: fmt.Sprintf("%s/%s", configMountPath, kubexecScriptName),
+		},
+		corev1.EnvVar{
+			Name:  "OMPI_MCA_orte_default_hostfile",
+			Value: fmt.Sprintf("%s/%s", configMountPath, hostfileName),
+		},
+		// We overwrite these environment variables so that users will not
+		// be mistakenly using GPU resources for launcher due to potential
+		// issues with scheduler/container technologies.
+		corev1.EnvVar{
+			Name:  "NVIDIA_VISIBLE_DEVICES",
+			Value: "",
+		},
+		corev1.EnvVar{
+			Name:  "NVIDIA_DRIVER_CAPABILITIES",
+			Value: "",
+		})
+
+	container.VolumeMounts = append(container.VolumeMounts,
+		corev1.VolumeMount{
+			Name:      kubectlVolumeName,
+			MountPath: kubectlMountPath,
+		},
+		corev1.VolumeMount{
+			Name:      configVolumeName,
+			MountPath: configMountPath,
+		})
+
+	for index, arg := range container.Args {
+		if arg == "-np" && index+1 < len(container.Args) {
+			container.Args[index+1] = "\"" + strconv.Itoa(int(workReplicas)) + "\""
+		}
+	}
+
 	podSpec.Spec.Containers[0] = container
 
 	// Submit a warning event if the user specifies restart policy for
