@@ -1739,6 +1739,12 @@ func (c *MPIJobController) newLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryI
 
 func (c *MPIJobController) reNewLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliveryImage string, workReplicas int32) *batchv1.Job {
 	launcherName := mpiJob.Name + launcherSuffix
+
+	launcher, err := c.jobLister.Jobs(mpiJob.Namespace).Get(launcherName)
+	if !errors.IsNotFound(err) {
+		return launcher
+	}
+	
 	labels := map[string]string{
 		labelGroupName:   "kubeflow.org",
 		labelMPIJobName:  mpiJob.Name,
