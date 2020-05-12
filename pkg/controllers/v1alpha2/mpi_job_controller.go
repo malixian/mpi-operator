@@ -1825,7 +1825,7 @@ func (c *MPIJobController) reNewLauncher(mpiJob *kubeflow.MPIJob, kubectlDeliver
 
 	for index, arg := range container.Args {
 		if arg == "-np" && index+1 < len(container.Args) {
-			container.Args[index+1] = "\"" + strconv.Itoa(int(workReplicas)) + "\""
+			container.Args[index+1] =  strconv.Itoa(int(workReplicas))
 		}
 	}
 
