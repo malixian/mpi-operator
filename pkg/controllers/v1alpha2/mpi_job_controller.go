@@ -589,6 +589,22 @@ func (c *MPIJobController) syncHandler(key string) error {
 				return err
 			}
 
+			//todo delete origin lanuncher Job
+			// Delete Origin Launcher Job
+			deletePolicy := metav1.DeletePropagationForeground
+			err = c.kubeClient.BatchV1().Jobs(namespace).Delete(
+				launcher.Name,
+				&metav1.DeleteOptions{
+					TypeMeta : metav1.TypeMeta{
+						Kind: "DeleteOptions",
+						APIVersion: "v1",
+					},
+					PropagationPolicy: &deletePolicy,
+				})
+			if err != nil {
+				return err
+			}
+
 		} else {
 			// Get the ConfigMap for this MPIJob.
 			if config, err := c.getOrCreateConfigMap(mpiJob, workerReplicas); config == nil || err != nil {
