@@ -60,6 +60,8 @@ import (
 	listers "github.com/kubeflow/mpi-operator/pkg/client/listers/kubeflow/v1alpha2"
 	"strconv"
 
+	scheduling "k8s.io/api/scheduling/v1"
+
 )
 
 const (
@@ -584,7 +586,9 @@ func (c *MPIJobController) syncHandler(key string) error {
 					return err
 				}
 			}
-
+			
+			// 生成作业的优先级
+			newPriorityClass(mpiJob)
 
 			worker, err = c.reCreateWorkerStatefulSet(mpiJob, workerReplicas, originName)
 			if err != nil {
@@ -1438,6 +1442,10 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 		podSpec.Annotations[podgroupv1alpha1.GroupNameAnnotationKey] = mpiJob.Name
 	}
 
+	// 添加pod优先级
+	// 优先级应该是根据job来定义的
+	podSpec.Spec.PriorityClassName  =  mpiJob.Name + "-" + "PriorityClass"
+
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mpiJob.Name + workerSuffix,
@@ -1459,6 +1467,28 @@ func newWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName
 	}
 }
 
+// 使用SRSF算法定义Job的优先级
+func newPriorityClass(mpiJob *kubeflow.MPIJob) *scheduling.PriorityClass {
+	// t代表作业的剩余完成时间
+	// todo change it
+	t := 1
+	// w代表作业的资源使用量
+	// todo change it
+	w := 1
+	priorityVal := t * w
+	// 定义为可抢占优先级
+	pp := corev1.PreemptLowerPriority
+
+	pc := &scheduling.PriorityClass {
+		Value : int32(priorityVal),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mpiJob.Name + "-" + "PriorityClass",
+			Namespace: mpiJob.Namespace,
+		},
+		PreemptionPolicy : &pp,
+	}
+	return pc
+}
 
 // reNew worker
 func reNewWorker(mpiJob *kubeflow.MPIJob, desiredReplicas int32, gangSchedulerName string, originName string) *appsv1.StatefulSet {
